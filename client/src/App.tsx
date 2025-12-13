@@ -226,6 +226,12 @@ function App() {
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
   };
 
+  const normalizeUrl = (url?: string) => {
+    if (!url) return "";
+    if (url.startsWith("http://") || url.startsWith("https://")) return url;
+    return `${API_BASE}${url}`;
+  };
+
   const pushNotice = (message: string, type: "success" | "info" | "error" = "success") => {
     if (type === "error") {
       toast.error(message);
@@ -337,9 +343,10 @@ function App() {
   };
 
   const handleDownload = async (resource: Resource) => {
-    if (!resource.url) return;
+    const normalized = normalizeUrl(resource.url);
+    if (!normalized) return;
     try {
-      const res = await fetch(resource.url);
+      const res = await fetch(normalized);
       if (!res.ok) {
         throw new Error("Download failed");
       }

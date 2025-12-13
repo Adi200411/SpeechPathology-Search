@@ -8,8 +8,8 @@ import { ObjectId } from "mongodb";
 import { PassThrough } from "stream";
 import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
-import { getResourcesCollection, getUploadsBucket } from "./db";
-import { ChatMessage, Resource } from "./types";
+import { getResourcesCollection, getUploadsBucket, getPatientsCollection } from "./db";
+import { ChatMessage, Resource, Patient } from "./types";
 
 dotenv.config();
 
@@ -24,6 +24,11 @@ const openai = new OpenAI({
 
 const PORT = process.env.PORT || 5000;
 
+const USERS = [
+  { username: process.env.BASIC_USER_1 || "therapist", password: process.env.BASIC_PASS_1 || "speech123", email: process.env.BASIC_EMAIL_1 || "therapist@example.com" },
+  { username: process.env.BASIC_USER_2 || "assistant", password: process.env.BASIC_PASS_2 || "helper123", email: process.env.BASIC_EMAIL_2 || "assistant@example.com" },
+];
+
 const tokenize = (input: string): string[] =>
   input
     .toLowerCase()
@@ -36,6 +41,24 @@ const stem = (token: string): string => {
   if (token.endsWith("es")) return token.slice(0, -2);
   if (token.endsWith("s")) return token.slice(0, -1);
   return token;
+};
+
+type AuthedRequest = Request & { user?: { sub: string; email?: string; name?: string } };
+
+const verifyAuth = (req: AuthedRequest, res: Response, next: () => void) => {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith("Basic ")) {
+    return res.status(401).json({ error: "Missing auth" });
+  }
+  const token = header.replace("Basic ", "").trim();
+  const decoded = Buffer.from(token, "base64").toString("utf8");
+  const [username, password] = decoded.split(":");
+  const user = USERS.find((u) => u.username === username && u.password === password);
+  if (!user) {
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+  req.user = { sub: user.username, email: user.email, name: user.username };
+  next();
 };
 
 const deriveLetterTags = (text: string): string[] => {
@@ -58,6 +81,19 @@ const toResource = (doc: any): Resource => ({
   createdAt: doc.createdAt,
   extractedText: doc.extractedText,
   insight: doc.insight,
+  ownerId: doc.ownerId,
+  ownerEmail: doc.ownerEmail,
+  patientIds: doc.patientIds || [],
+});
+
+const toPatient = (doc: any): Patient => ({
+  id: doc._id?.toString(),
+  _id: doc._id?.toString(),
+  name: doc.name,
+  notes: doc.notes,
+  ownerId: doc.ownerId,
+  ownerEmail: doc.ownerEmail,
+  createdAt: doc.createdAt,
 });
 
 const scoreResources = (query: string, list: Resource[]): Resource[] => {
@@ -186,11 +222,72 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, message: "Server healthy" });
 });
 
+// Authenticated routes
+app.use("/api", verifyAuth as any);
+
+// Patients CRUD (minimal)
+app.get("/api/patients", async (req: AuthedRequest, res) => {
+  try {
+    const col = await getPatientsCollection();
+    const docs = await col.find({ ownerId: req.user?.sub }).sort({ createdAt: -1 }).limit(200).toArray();
+    res.json({ data: docs.map(toPatient) });
+  } catch (err) {
+    console.error("Failed to fetch patients", err);
+    res.status(500).json({ error: "Failed to fetch patients" });
+  }
+});
+
+app.post("/api/patients", async (req: AuthedRequest, res) => {
+  const { name, notes } = req.body;
+  if (!name || typeof name !== "string") {
+    return res.status(400).json({ error: "Name is required" });
+  }
+  const newDoc: Patient = {
+    name: name.trim(),
+    notes: typeof notes === "string" ? notes.trim() : undefined,
+    ownerId: req.user?.sub,
+    ownerEmail: req.user?.email,
+    createdAt: new Date().toISOString(),
+  };
+  try {
+    const col = await getPatientsCollection();
+    const result = await col.insertOne(newDoc);
+    res.status(201).json({ data: { ...newDoc, id: result.insertedId.toString(), _id: result.insertedId.toString() } });
+  } catch (err) {
+    console.error("Failed to create patient", err);
+    res.status(500).json({ error: "Failed to create patient" });
+  }
+});
+
+app.delete("/api/patients/:id", async (req: AuthedRequest, res) => {
+  const { id } = req.params;
+  if (!ObjectId.isValid(id)) {
+    return res.status(400).json({ error: "Invalid patient id" });
+  }
+  try {
+    const col = await getPatientsCollection();
+    const existing = await col.findOne({ _id: new ObjectId(id) as any, ownerId: req.user?.sub });
+    if (!existing) {
+      return res.status(404).json({ error: "Patient not found" });
+    }
+    await col.deleteOne({ _id: new ObjectId(id) as any });
+
+    // Remove patient from resources
+    const rCol = await getResourcesCollection();
+    await rCol.updateMany({ ownerId: req.user?.sub }, { $pull: { patientIds: id } });
+
+    res.status(204).send();
+  } catch (err) {
+    console.error("Failed to delete patient", err);
+    res.status(500).json({ error: "Failed to delete patient" });
+  }
+});
+
 // Fetch all resources (MongoDB)
-app.get("/api/resources", async (_req, res) => {
+app.get("/api/resources", async (req: AuthedRequest, res) => {
   try {
     const col = await getResourcesCollection();
-    const docs = await col.find().sort({ createdAt: -1 }).limit(200).toArray();
+    const docs = await col.find({ ownerId: req.user?.sub }).sort({ createdAt: -1 }).limit(200).toArray();
     res.json({ data: docs.map(toResource) });
   } catch (err) {
     console.error("Failed to fetch resources", err);
@@ -199,7 +296,7 @@ app.get("/api/resources", async (_req, res) => {
 });
 
 // Create resource
-app.post("/api/upload", async (req: Request, res: Response) => {
+app.post("/api/upload", async (req: AuthedRequest, res: Response) => {
   const { title, description, url, tags = [], ageRange, type, uploadedBy, fileId } = req.body;
 
   if (!title || !description) {
@@ -222,8 +319,11 @@ app.post("/api/upload", async (req: Request, res: Response) => {
     tags: Array.from(new Set([...(Array.isArray(derivedTags) ? derivedTags : []), ...letterTags])),
     ageRange,
     type,
-    uploadedBy,
+    uploadedBy: uploadedBy || req.user?.email,
     createdAt: new Date().toISOString(),
+    ownerId: req.user?.sub,
+    ownerEmail: req.user?.email,
+    patientIds: [],
   };
 
   try {
@@ -237,9 +337,9 @@ app.post("/api/upload", async (req: Request, res: Response) => {
 });
 
 // Update existing resource
-app.put("/api/resources/:id", async (req: Request, res: Response) => {
+app.put("/api/resources/:id", async (req: AuthedRequest, res: Response) => {
   const { id } = req.params;
-  const { title, description, url, tags, ageRange, type, uploadedBy, fileId } = req.body;
+  const { title, description, url, tags, ageRange, type, uploadedBy, fileId, patientIds } = req.body;
 
   if (!ObjectId.isValid(id)) {
     return res.status(400).json({ error: "Invalid resource id" });
@@ -258,7 +358,7 @@ app.put("/api/resources/:id", async (req: Request, res: Response) => {
 
   try {
     const col = await getResourcesCollection();
-    const existing = await col.findOne({ _id: new ObjectId(id) as any });
+    const existing = await col.findOne({ _id: new ObjectId(id) as any, ownerId: req.user?.sub });
     if (!existing) {
       return res.status(404).json({ error: "Resource not found" });
     }
@@ -275,7 +375,8 @@ app.put("/api/resources/:id", async (req: Request, res: Response) => {
       tags: Array.from(new Set([...(mergedTags || existing.tags || []), ...letterTags])),
       ageRange: ageRange ?? existing.ageRange,
       type: type ?? existing.type,
-      uploadedBy: uploadedBy ?? existing.uploadedBy,
+      uploadedBy: uploadedBy ?? existing.uploadedBy ?? req.user?.email,
+      patientIds: Array.isArray(patientIds) ? patientIds.filter((p: string) => typeof p === "string") : existing.patientIds || [],
     };
 
     await col.updateOne({ _id: new ObjectId(id) as any }, { $set: updateDoc });
@@ -287,8 +388,34 @@ app.put("/api/resources/:id", async (req: Request, res: Response) => {
   }
 });
 
+// Assign/unassign patients to a resource
+app.put("/api/resources/:id/patients", async (req: AuthedRequest, res: Response) => {
+  const { id } = req.params;
+  const { patientIds = [] } = req.body;
+  if (!ObjectId.isValid(id)) {
+    return res.status(400).json({ error: "Invalid resource id" });
+  }
+  if (!Array.isArray(patientIds)) {
+    return res.status(400).json({ error: "patientIds must be an array" });
+  }
+  const cleanIds = patientIds.filter((p: any) => typeof p === "string");
+  try {
+    const col = await getResourcesCollection();
+    const existing = await col.findOne({ _id: new ObjectId(id) as any, ownerId: req.user?.sub });
+    if (!existing) {
+      return res.status(404).json({ error: "Resource not found" });
+    }
+    await col.updateOne({ _id: new ObjectId(id) as any }, { $set: { patientIds: cleanIds } });
+    const updated = await col.findOne({ _id: new ObjectId(id) as any });
+    res.json({ data: updated ? toResource(updated) : null });
+  } catch (err) {
+    console.error("Failed to update resource patients", err);
+    res.status(500).json({ error: "Failed to update resource patients" });
+  }
+});
+
 // Delete resource (and associated file if present)
-app.delete("/api/resources/:id", async (req: Request, res: Response) => {
+app.delete("/api/resources/:id", async (req: AuthedRequest, res: Response) => {
   const { id } = req.params;
   if (!ObjectId.isValid(id)) {
     return res.status(400).json({ error: "Invalid resource id" });
@@ -296,7 +423,7 @@ app.delete("/api/resources/:id", async (req: Request, res: Response) => {
 
   try {
     const col = await getResourcesCollection();
-    const existing = await col.findOne({ _id: new ObjectId(id) as any });
+    const existing = await col.findOne({ _id: new ObjectId(id) as any, ownerId: req.user?.sub });
     if (!existing) {
       return res.status(404).json({ error: "Resource not found" });
     }
@@ -320,7 +447,7 @@ app.delete("/api/resources/:id", async (req: Request, res: Response) => {
 });
 
 // File metadata upload (no parsing, just returns basic info)
-app.post("/api/upload-file", upload.single("file"), async (req: Request, res: Response) => {
+app.post("/api/upload-file", upload.single("file"), async (req: AuthedRequest, res: Response) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: "No file provided." });
@@ -371,11 +498,16 @@ app.post("/api/upload-file", upload.single("file"), async (req: Request, res: Re
 });
 
 // Download a stored file from GridFS
-app.get("/api/files/:id", async (req: Request, res: Response) => {
+app.get("/api/files/:id", async (req: AuthedRequest, res: Response) => {
   try {
     const { id } = req.params;
     if (!ObjectId.isValid(id)) {
       return res.status(400).json({ error: "Invalid file id" });
+    }
+    const col = await getResourcesCollection();
+    const ownedResource = await col.findOne({ fileId: id, ownerId: req.user?.sub });
+    if (!ownedResource) {
+      return res.status(404).json({ error: "File not found" });
     }
     const bucket = await getUploadsBucket();
     const downloadStream = bucket.openDownloadStream(new ObjectId(id));
@@ -398,7 +530,7 @@ app.get("/api/files/:id", async (req: Request, res: Response) => {
 });
 
 // Chat endpoint with Mongo-backed retrieval
-app.post("/api/chat", async (req: Request, res: Response) => {
+app.post("/api/chat", async (req: AuthedRequest, res: Response) => {
   const { message, history = [] }: { message: string; history?: ChatMessage[] } = req.body;
 
   if (!message) {
@@ -414,7 +546,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
   try {
     const col = await getResourcesCollection();
     // naive fetch; in production consider text indexes or vector search
-    const docs = await col.find().limit(200).toArray();
+    const docs = await col.find({ ownerId: req.user?.sub }).limit(200).toArray();
     const resources = docs.map(toResource);
 
     const topMatches = scoreResources(message, resources);

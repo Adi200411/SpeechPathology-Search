@@ -1,6 +1,6 @@
 import { MongoClient, Db, Collection } from "mongodb";
 import dotenv from "dotenv";
-import type { Resource } from "./types";
+import type { Resource, Patient } from "./types";
 
 dotenv.config();
 
@@ -10,6 +10,7 @@ let bucket: import("mongodb").GridFSBucket | null = null;
 
 const DB_NAME = process.env.MONGODB_DB || "speechpath";
 const COLLECTION_NAME = "resources";
+const PATIENT_COLLECTION = "patients";
 
 export const getDb = async (): Promise<Db> => {
   if (db) return db;
@@ -27,6 +28,11 @@ export const getDb = async (): Promise<Db> => {
 export const getResourcesCollection = async (): Promise<Collection<Resource>> => {
   const database = await getDb();
   return database.collection<Resource>(COLLECTION_NAME);
+};
+
+export const getPatientsCollection = async (): Promise<Collection<Patient>> => {
+  const database = await getDb();
+  return database.collection<Patient>(PATIENT_COLLECTION);
 };
 
 export const getUploadsBucket = async () => {

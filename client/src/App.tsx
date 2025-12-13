@@ -18,6 +18,7 @@ type Resource = {
   uploadedBy?: string;
   createdAt?: string;
   insight?: string;
+  patientIds?: string[];
 };
 
 type Message = {
@@ -48,7 +49,15 @@ type Folder = {
   isLocked?: boolean;
 };
 
+type Patient = {
+  id: string;
+  name: string;
+  notes?: string;
+};
+
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5000";
+const AUTH_STORAGE_KEY = "speech-basic-auth";
+
 
 const initialAssistant: Message = {
   role: "assistant",
@@ -94,6 +103,12 @@ function App() {
     "What materials should I prep for phonology (fronting)?",
   ]);
   const [customPrompt, setCustomPrompt] = useState("");
+  const [patients, setPatients] = useState<Patient[]>([]);
+  const [newPatient, setNewPatient] = useState<{ name: string; notes: string }>({ name: "", notes: "" });
+  const [showPatientModal, setShowPatientModal] = useState(false);
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [userProfile, setUserProfile] = useState<{ name?: string; email?: string } | null>(null);
+  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
 
   const [uploadForm, setUploadForm] = useState<UploadFormState>({
     title: "",
@@ -105,6 +120,8 @@ function App() {
     type: "",
     uploadedBy: "",
   });
+  const hasFile = !!uploadForm.fileId;
+  const hasLink = !!uploadForm.url?.trim();
 
   const [folders, setFolders] = useState<Folder[]>(() => {
     if (typeof window === "undefined") return BASE_FOLDERS;
@@ -170,7 +187,9 @@ function App() {
   useEffect(() => {
     const fetchResources = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/resources`);
+        const res = await fetch(`${API_BASE}/api/resources`, {
+          headers: authToken ? { Authorization: `Basic ${authToken}` } : {},
+        });
         const data = await res.json();
         setLibrary(data.data || []);
       } catch (err) {
@@ -178,8 +197,27 @@ function App() {
       }
     };
 
-    fetchResources();
-  }, []);
+    if (authToken) {
+      fetchResources();
+    }
+  }, [authToken]);
+
+  useEffect(() => {
+    const fetchPatients = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/patients`, {
+          headers: authToken ? { Authorization: `Basic ${authToken}` } : {},
+        });
+        const data = await res.json();
+        setPatients(data.data || []);
+      } catch (err) {
+        console.error("Failed to load patients", err);
+      }
+    };
+    if (authToken) {
+      fetchPatients();
+    }
+  }, [authToken]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -190,6 +228,20 @@ function App() {
       setTimeout(() => titleInputRef.current?.focus(), 50);
     }
   }, [showUpload]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(AUTH_STORAGE_KEY);
+    if (stored) {
+      setAuthToken(stored);
+      try {
+        const decoded = atob(stored).split(":");
+        setUserProfile({ name: decoded[0], email: "" });
+      } catch {
+        setUserProfile(null);
+      }
+    }
+  }, []);
 
   const historyForApi = useMemo<ChatPayloadMessage[]>(
     () =>
@@ -210,6 +262,14 @@ function App() {
             .filter(Boolean),
     [uploadForm.tags],
   );
+
+  const patientMap = useMemo(() => {
+    const map: Record<string, Patient> = {};
+    patients.forEach((p) => {
+      if (p.id) map[p.id] = p;
+    });
+    return map;
+  }, [patients]);
 
   const formatType = (t?: string) => {
     if (!t) return undefined;
@@ -232,6 +292,49 @@ function App() {
     return `${API_BASE}${url}`;
   };
 
+  const handleView = async (resource: Resource) => {
+    if (!authToken) {
+      pushNotice("Please sign in first.", "error");
+      return;
+    }
+    const normalized = normalizeUrl(resource.url);
+    if (!normalized) return;
+    try {
+      const res = await fetch(normalized, { headers: { Authorization: `Basic ${authToken}` } });
+      if (!res.ok) throw new Error("View failed");
+      const blob = await res.blob();
+      const href = URL.createObjectURL(blob);
+      window.open(href, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      console.error(err);
+      pushNotice("View failed. Please try again.", "error");
+    }
+  };
+
+  const handleLogin = () => {
+    const user = loginForm.username.trim();
+    const pass = loginForm.password.trim();
+    if (!user || !pass) {
+      pushNotice("Enter username and password", "error");
+      return;
+    }
+    const token = btoa(`${user}:${pass}`);
+    setAuthToken(token);
+    setUserProfile({ name: user, email: "" });
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(AUTH_STORAGE_KEY, token);
+    }
+    pushNotice("Signed in", "success");
+  };
+
+  const handleLogout = () => {
+    setAuthToken(null);
+    setUserProfile(null);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    }
+  };
+
   const pushNotice = (message: string, type: "success" | "info" | "error" = "success") => {
     if (type === "error") {
       toast.error(message);
@@ -242,6 +345,115 @@ function App() {
       return;
     }
     toast.success(message);
+  };
+
+  const handleAddPatient = async () => {
+    if (!authToken) {
+      pushNotice("Please sign in first.", "error");
+      return;
+    }
+    const name = newPatient.name.trim();
+    if (!name) {
+      pushNotice("Patient name is required.", "error");
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/patients`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Basic ${authToken}` },
+        body: JSON.stringify({ name, notes: newPatient.notes.trim() || undefined }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to add patient");
+      }
+      const data = await res.json();
+      setPatients((prev) => [data.data, ...prev]);
+      setNewPatient({ name: "", notes: "" });
+      pushNotice("Patient added", "success");
+    } catch (err) {
+      console.error(err);
+      pushNotice("Could not add patient.", "error");
+    }
+  };
+
+  const handleDeletePatient = async (id?: string) => {
+    if (!authToken || !id) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/patients/${id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Basic ${authToken}` },
+      });
+      if (!res.ok && res.status !== 204) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to delete patient");
+      }
+      setPatients((prev) => prev.filter((p) => p.id !== id));
+      // Remove patient from any loaded resources
+      setLibrary((prev) =>
+        prev.map((r) => ({
+          ...r,
+          patientIds: (r.patientIds || []).filter((pid) => pid !== id),
+        })),
+      );
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.resources
+            ? {
+                ...msg,
+                resources: msg.resources.map((r) => ({
+                  ...r,
+                  patientIds: (r.patientIds || []).filter((pid) => pid !== id),
+                })),
+              }
+            : msg,
+        ),
+      );
+      pushNotice("Patient removed", "info");
+    } catch (err) {
+      console.error(err);
+      pushNotice("Could not delete patient.", "error");
+    }
+  };
+
+  const updateResourcePatients = async (resourceId: string, nextIds: string[]) => {
+    if (!authToken) {
+      pushNotice("Please sign in first.", "error");
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/resources/${resourceId}/patients`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Basic ${authToken}` },
+        body: JSON.stringify({ patientIds: nextIds }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to assign patient");
+      }
+      const data = await res.json();
+      const updated = data.data as Resource;
+      setLibrary((prev) => prev.map((item) => (item.id === resourceId ? updated : item)));
+      syncResourceUpdateInChat(updated);
+      pushNotice("Updated patient assignment", "success");
+    } catch (err) {
+      console.error(err);
+      pushNotice("Could not update patient assignment.", "error");
+    }
+  };
+
+  const handleAssignPatient = (resource: Resource, patientId: string) => {
+    if (!patientId) return;
+    const current = resource.patientIds || [];
+    if (current.includes(patientId)) return;
+    const next = [...current, patientId];
+    updateResourcePatients(resource.id, next);
+  };
+
+  const handleRemovePatient = (resource: Resource, patientId: string) => {
+    const current = resource.patientIds || [];
+    const next = current.filter((id) => id !== patientId);
+    updateResourcePatients(resource.id, next);
   };
 
   useEffect(() => {
@@ -343,10 +555,14 @@ function App() {
   };
 
   const handleDownload = async (resource: Resource) => {
+    if (!authToken) {
+      pushNotice("Please sign in first.", "error");
+      return;
+    }
     const normalized = normalizeUrl(resource.url);
     if (!normalized) return;
     try {
-      const res = await fetch(normalized);
+      const res = await fetch(normalized, { headers: { Authorization: `Basic ${authToken}` } });
       if (!res.ok) {
         throw new Error("Download failed");
       }
@@ -370,6 +586,10 @@ function App() {
   
 
   const handleSend = async () => {
+    if (!authToken) {
+      pushNotice("Please sign in first.", "error");
+      return;
+    }
     const trimmed = input.trim();
     if (!trimmed) return;
 
@@ -385,7 +605,7 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/api/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Basic ${authToken}` },
         body: JSON.stringify({ message: trimmed, history: historyPayload }),
       });
 
@@ -427,7 +647,18 @@ function App() {
 
   const handleUpload = async (e: FormEvent) => {
     e.preventDefault();
-    if (!uploadForm.title || !uploadForm.description) return;
+    if (!authToken) {
+      pushNotice("Please sign in first.", "error");
+      return;
+    }
+    if (hasFile && hasLink) {
+      pushNotice("Choose either a link or a file, not both.", "error");
+      return;
+    }
+    if (!uploadForm.title || !uploadForm.description) {
+      pushNotice("Title and description are required.", "error");
+      return;
+    }
 
     const titleKey = uploadForm.title.trim().toLowerCase();
     const duplicate = library.some((r) => (r.title || "").trim().toLowerCase() === titleKey);
@@ -448,7 +679,7 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/api/upload`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Basic ${authToken}` },
         body: JSON.stringify({
           ...uploadForm,
           tags: normalizedTags,
@@ -484,7 +715,18 @@ function App() {
 
   const handleUpdate = async (e: FormEvent) => {
     e.preventDefault();
-    if (!editResourceId || !uploadForm.title || !uploadForm.description) return;
+    if (!authToken) {
+      pushNotice("Please sign in first.", "error");
+      return;
+    }
+    if (hasFile && hasLink) {
+      pushNotice("Choose either a link or a file, not both.", "error");
+      return;
+    }
+    if (!editResourceId || !uploadForm.title || !uploadForm.description) {
+      pushNotice("Title and description are required.", "error");
+      return;
+    }
 
     setUploading(true);
     const normalizedTags: string[] = Array.isArray(uploadForm.tags)
@@ -497,7 +739,7 @@ function App() {
     try {
       const res = await fetch(`${API_BASE}/api/resources/${editResourceId}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Basic ${authToken}` },
         body: JSON.stringify({
           ...uploadForm,
           tags: normalizedTags,
@@ -533,11 +775,15 @@ function App() {
     }
   };
 
-  const startNewChat = () => {
-    setMessages([initialAssistant]);
-  };
-
   const onDrop = async (acceptedFiles: File[]) => {
+    if (!authToken) {
+      pushNotice("Please sign in first.", "error");
+      return;
+    }
+    if (hasLink) {
+      pushNotice("Remove the link to attach a file, or keep the link instead.", "error");
+      return;
+    }
     const file = acceptedFiles[0];
     if (!file) return;
 
@@ -550,6 +796,7 @@ function App() {
       const res = await fetch(`${API_BASE}/api/upload-file`, {
         method: "POST",
         body: formData,
+        headers: { Authorization: `Basic ${authToken}` },
       });
 
       if (!res.ok) {
@@ -587,6 +834,10 @@ function App() {
   };
 
   const handleDelete = (id?: string) => {
+    if (!authToken) {
+      pushNotice("Please sign in first.", "error");
+      return;
+    }
     if (!id) return;
     const resource = library.find((r) => r.id === id);
     if (!resource) return;
@@ -634,6 +885,7 @@ function App() {
       try {
         const res = await fetch(`${API_BASE}/api/resources/${id}`, {
           method: "DELETE",
+          headers: { Authorization: `Basic ${authToken}` },
         });
         if (!res.ok) {
           throw new Error("Delete failed");
@@ -689,6 +941,7 @@ function App() {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     multiple: false,
+    disabled: hasLink,
     accept: {
       "application/pdf": [".pdf"],
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [".docx"],
@@ -731,6 +984,42 @@ function App() {
                 </span>
               )}
             </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {(res.patientIds || []).map((pid) => (
+                <span
+                  key={pid}
+                  className="flex items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-[11px] font-semibold text-orange-700"
+                >
+                  {patientMap[pid]?.name || "Patient"}
+                  <button
+                    onClick={() => handleRemovePatient(res, pid)}
+                    className="text-[10px] text-orange-700 hover:text-orange-900"
+                    aria-label="Remove patient"
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+              {patients.length > 0 && (
+                <select
+                  onChange={(e) => {
+                    handleAssignPatient(res, e.target.value);
+                    e.currentTarget.value = "";
+                  }}
+                  defaultValue=""
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-ink outline-none focus:border-accent"
+                >
+                  <option value="" disabled>
+                    Assign to patient
+                  </option>
+                  {patients.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
             <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
@@ -743,49 +1032,73 @@ function App() {
                   {formatDate(res.createdAt)}
                 </span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 <button
                   onClick={() => {
                     setEditResourceId(res.id);
                     setUploadForm({
                       title: res.title || "",
-                                description: res.description || "",
-                                url: res.url || "",
-                                fileId: res.fileId || "",
-                                tags: res.tags || [],
-                                ageRange: res.ageRange || "",
-                                type: res.type || "",
-                                uploadedBy: res.uploadedBy || "",
-                              });
-                              setReturnToLibraryAfterEdit(true);
-                              setShowLibrary(false);
-                              setReturnToLibraryAfterEdit(true); setShowLibrary(false); setShowUpload(true);
-                            }}
-                            className="rounded-full border border-slate-200 px-3 py-1 text-[11px] font-semibold text-accent transition hover:border-accent hover:bg-accentSoft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                            aria-label="Edit resource"
-                          >
-                            Edit
-            </button>
+                      description: res.description || "",
+                      url: res.url || "",
+                      fileId: res.fileId || "",
+                      tags: res.tags || [],
+                      ageRange: res.ageRange || "",
+                      type: res.type || "",
+                      uploadedBy: res.uploadedBy || "",
+                    });
+                    setReturnToLibraryAfterEdit(true);
+                    setShowLibrary(false);
+                    setShowUpload(true);
+                  }}
+                  className="rounded-full border border-slate-200 px-3 py-1 text-[11px] font-semibold text-accent transition hover:border-accent hover:bg-accentSoft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  aria-label="Edit resource"
+                >
+                  Edit
+                </button>
                 <button
+                  type="button"
                   onClick={() => handleDelete(res.id)}
                   className="rounded-full border border-slate-200 px-3 py-1 text-[11px] font-semibold text-red-500 transition hover:border-red-200 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
                   aria-label="Delete resource"
                 >
                   Delete
                 </button>
-                <button
-                  type="button"
-                  onClick={() => res.url && handleDownload(res)}
-                  className={`rounded-full px-3 py-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-                    res.url
-                      ? "bg-accent text-white hover:brightness-110"
-                      : "cursor-not-allowed bg-slate-200 text-slate-500"
-                  }`}
-                  disabled={!res.url}
-                  aria-label={res.url ? "Download resource" : "Download unavailable"}
-                >
-                  {res.url ? "Download" : "No link"}
-                </button>
+                {res.url && res.url.startsWith("http") && !res.fileId ? (
+                  <a
+                    href={res.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-full border border-ink/20 px-3 py-1 text-[11px] font-semibold text-ink transition hover:border-accent hover:text-accent"
+                    aria-label="Open link"
+                  >
+                    Open link
+                  </a>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => res.url && handleView(res)}
+                      className={`rounded-full px-3 py-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                        res.url ? "border border-ink/20 text-ink hover:border-accent hover:text-accent" : "cursor-not-allowed border border-slate-200 text-slate-500"
+                      }`}
+                      disabled={!res.url}
+                      aria-label={res.url ? "View resource" : "View unavailable"}
+                    >
+                      View
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => res.url && handleDownload(res)}
+                      className={`rounded-full px-3 py-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                        res.url ? "bg-accent text-white hover:brightness-110" : "cursor-not-allowed bg-slate-200 text-slate-500"
+                      }`}
+                      disabled={!res.url}
+                      aria-label={res.url ? "Download resource" : "Download unavailable"}
+                    >
+                      {res.url ? "Download" : "No link"}
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -819,16 +1132,57 @@ function App() {
           ariaProps: { role: "status", "aria-live": "polite" },
         }}
       />
+      {!authToken ? (
+        <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-foam via-white to-sky/20 px-4">
+          <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div className="text-center">
+              <p className="text-xs uppercase tracking-[0.25em] text-slate-600">Speechie Library</p>
+              <h1 className="mt-2 text-2xl font-semibold text-ink">Resource Library for Speech Pathologists</h1>
+              <p className="mt-2 text-sm text-slate-600">Sign in to access your resources.</p>
+            </div>
+            <div className="mt-6 space-y-3">
+              <div className="space-y-1">
+                <label className="text-sm font-medium text-ink">Username</label>
+                <input
+                  value={loginForm.username}
+                  onChange={(e) => setLoginForm((p) => ({ ...p, username: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-accent"
+                  placeholder=""
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium text-ink">Password</label>
+                <input
+                  type="password"
+                  value={loginForm.password}
+                  onChange={(e) => setLoginForm((p) => ({ ...p, password: e.target.value }))}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-accent"
+                  placeholder=""
+                />
+              </div>
+              <button
+                onClick={handleLogin}
+                className="w-full rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110"
+              >
+                Sign in
+              </button>
+            </div>
+            <p className="mt-4 text-center text-xs text-slate-500">
+              Use the credentials provided by your admin to access your library.
+            </p>
+          </div>
+        </div>
+      ) : (
       <div className="mx-auto max-w-7xl px-6 py-8">
-        <header className="mb-6 flex flex-col gap-4 rounded-3xl bg-gradient-to-br from-accentSoft via-foam to-sky/20 p-6 shadow-lg ring-1 ring-white/50 backdrop-blur">
+        <header className="relative mb-6 flex flex-col gap-4 rounded-3xl bg-gradient-to-br from-accentSoft via-foam to-sky/20 p-6 shadow-lg ring-1 ring-white/50 backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.25em] text-slate-600">Speechie Library 🐧</p>
+              <p className="text-xs uppercase tracking-[0.25em] text-slate-600">Speechie Library</p>
               <h1 className="mt-2 text-3xl font-semibold text-ink">
                 Resource Library for Speech Pathologists
               </h1>
             </div>
-            <div className="flex flex-wrap gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <button
                 onClick={() => setShowLibrary(true)}
                 className="rounded-full border border-ink/10 bg-white/80 px-4 py-2 text-sm font-semibold text-ink shadow-sm transition hover:-translate-y-[1px] hover:border-ink/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -836,10 +1190,11 @@ function App() {
                 Library
               </button>
               <button
-                onClick={startNewChat}
+                onClick={() => setShowPatientModal(true)}
                 className="rounded-full border border-ink/10 bg-white/80 px-4 py-2 text-sm font-semibold text-ink shadow-sm transition hover:-translate-y-[1px] hover:border-ink/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                aria-label="Manage patients"
               >
-                New chat
+                Manage patients
               </button>
               <button
                 onClick={() => setShowUpload(true)}
@@ -896,6 +1251,18 @@ function App() {
                   Add
                 </button>
               </div>
+            </div>
+            <div className="mt-auto rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 shadow-sm">
+              <div className="text-xs">
+                <p className="font-semibold text-ink">{userProfile?.name || "Signed in"}</p>
+                <p className="text-slate-500">Secure session</p>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="mt-2 w-full rounded-full bg-red-500 px-4 py-2 text-[11px] font-semibold text-white shadow-sm transition hover:-translate-y-[1px] hover:bg-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200"
+              >
+                Logout
+              </button>
             </div>
           </aside>
 
@@ -957,6 +1324,7 @@ function App() {
           </main>
         </div>
       </div>
+      )}
 
       {showLibrary && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4 backdrop-blur">
@@ -1077,16 +1445,16 @@ function App() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
-                <span className="text-[11px] font-semibold text-slate-500">
-                  Drag to organize • Drop on a folder
-                </span>
-                {draggingResourceId && (
-                  <span className="rounded-full bg-accentSoft px-2 py-1 text-[11px] font-semibold text-accent">
-                    Dragging
-                  </span>
-                )}
-              </div>
-            </div>
+                    <span className="text-[11px] font-semibold text-slate-500">
+                      Drag to organize · Drop on a folder
+                    </span>
+                    {draggingResourceId && (
+                      <span className="rounded-full bg-accentSoft px-2 py-1 text-[11px] font-semibold text-accent">
+                        Dragging
+                      </span>
+                    )}
+                  </div>
+                </div>
 
                 {filteredLibrary.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-6 text-center text-sm text-slate-500">
@@ -1138,6 +1506,42 @@ function App() {
                             </span>
                           )}
                         </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          {(res.patientIds || []).map((pid) => (
+                            <span
+                              key={pid}
+                              className="flex items-center gap-1 rounded-full bg-orange-50 px-2 py-0.5 text-[11px] font-semibold text-orange-700"
+                            >
+                              {patientMap[pid]?.name || "Patient"}
+                              <button
+                                onClick={() => handleRemovePatient(res, pid)}
+                                className="text-[10px] text-orange-700 hover:text-orange-900"
+                                aria-label="Remove patient"
+                              >
+                                ✕
+                              </button>
+                            </span>
+                          ))}
+                          {patients.length > 0 && (
+                            <select
+                              onChange={(e) => {
+                                handleAssignPatient(res, e.target.value);
+                                e.currentTarget.value = "";
+                              }}
+                              defaultValue=""
+                              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-ink outline-none focus:border-accent"
+                            >
+                              <option value="" disabled>
+                                Assign to patient
+                              </option>
+                              {patients.map((p) => (
+                                <option key={p.id} value={p.id}>
+                                  {p.name}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
                         <div className="mt-3 flex items-center justify-between text-xs text-slate-500">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
@@ -1150,58 +1554,157 @@ function App() {
                               {formatDate(res.createdAt)}
                             </span>
                           </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditResourceId(res.id);
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditResourceId(res.id);
                                 setUploadForm({
                                   title: res.title || "",
                                   description: res.description || "",
                                   url: res.url || "",
                                   fileId: res.fileId || "",
-                              tags: res.tags || [],
-                              ageRange: res.ageRange || "",
-                              type: res.type || "",
-                              uploadedBy: res.uploadedBy || "",
-                            });
-                              setReturnToLibraryAfterEdit(true);
-                              setShowLibrary(false);
-                              setShowUpload(true);
-                            }}
-                            className="rounded-full border border-slate-200 px-3 py-1 text-[11px] font-semibold text-accent transition hover:border-accent hover:bg-accentSoft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                            aria-label="Edit resource"
-                          >
-                            Edit
-                          </button>
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => handleDelete(res.id)}
-                              className="rounded-full border border-slate-200 px-3 py-1 text-[11px] font-semibold text-red-500 transition hover:border-red-200 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
-                              aria-label="Delete resource"
+                                  tags: res.tags || [],
+                                  ageRange: res.ageRange || "",
+                                  type: res.type || "",
+                                  uploadedBy: res.uploadedBy || "",
+                                });
+                                setReturnToLibraryAfterEdit(true);
+                                setShowLibrary(false);
+                                setShowUpload(true);
+                              }}
+                              className="rounded-full border border-slate-200 px-3 py-1 text-[11px] font-semibold text-accent transition hover:border-accent hover:bg-accentSoft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                              aria-label="Edit resource"
                             >
-                              Delete
+                              Edit
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => res.url && handleDownload(res)}
-                              className={`rounded-full px-3 py-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-                                res.url ? "bg-ink text-white hover:brightness-110" : "cursor-not-allowed bg-slate-200 text-slate-500"
-                              }`}
-                              disabled={!res.url}
-                              aria-label={res.url ? "Download resource" : "Download unavailable"}
-                            >
-                              {res.url ? "Download" : "No link"}
-                            </button>
+                            <div className="flex items-center gap-1">
+                              {res.url && res.url.startsWith("http") && !res.fileId ? (
+                                <a
+                                  href={res.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="rounded-full border border-ink/20 px-3 py-1 text-[11px] font-semibold text-ink transition hover:border-accent hover:text-accent"
+                                  aria-label="Open link"
+                                >
+                                  Open link
+                                </a>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => res.url && handleView(res)}
+                                    className={`rounded-full px-3 py-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                                      res.url ? "border border-ink/20 text-ink hover:border-accent hover:text-accent" : "cursor-not-allowed border border-slate-200 text-slate-500"
+                                    }`}
+                                    disabled={!res.url}
+                                    aria-label={res.url ? "View resource" : "View unavailable"}
+                                  >
+                                    View
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => res.url && handleDownload(res)}
+                                    className={`rounded-full px-3 py-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                                      res.url ? "bg-ink text-white hover:brightness-110" : "cursor-not-allowed bg-slate-200 text-slate-500"
+                                    }`}
+                                    disabled={!res.url}
+                                    aria-label={res.url ? "Download resource" : "Download unavailable"}
+                                  >
+                                    {res.url ? "Download" : "No link"}
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleDelete(res.id)}
+                                className="rounded-full border border-slate-200 px-3 py-1 text-[11px] font-semibold text-red-500 transition hover:border-red-200 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+                                aria-label="Delete resource"
+                              >
+                                Delete
+                              </button>
+                            </div>
                           </div>
-                        </div>
                         </div>
                       </div>
                     ))}
                   </div>
                 )}
               </section>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPatientModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4 backdrop-blur">
+          <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-ink">Manage patients</h2>
+              <button
+                onClick={() => setShowPatientModal(false)}
+                className="rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-600 hover:border-ink"
+              >
+                Close
+              </button>
+            </div>
+            <div className="mt-4 space-y-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-ink">Name</label>
+                  <input
+                    value={newPatient.name}
+                    onChange={(e) => setNewPatient((p) => ({ ...p, name: e.target.value }))}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-accent"
+                    placeholder="Patient name"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-ink">Notes (optional)</label>
+                  <textarea
+                    value={newPatient.notes}
+                    onChange={(e) => setNewPatient((p) => ({ ...p, notes: e.target.value }))}
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-accent"
+                    rows={3}
+                    placeholder="Goals, reminders, etc."
+                  />
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <button
+                  onClick={async () => {
+                    await handleAddPatient();
+                  }}
+                  className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110"
+                >
+                  Save patient
+                </button>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
+                <p className="text-sm font-semibold text-ink">Patients</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {patients.length === 0 ? (
+                    <p className="text-xs text-slate-500">No patients yet. Add one to start assigning resources.</p>
+                  ) : (
+                    patients.map((p) => (
+                      <span
+                        key={p.id}
+                        className="flex items-center gap-2 rounded-full bg-white px-3 py-1 text-[12px] font-semibold text-ink shadow-sm"
+                      >
+                        {p.name}
+                        <button
+                          onClick={() => handleDeletePatient(p.id)}
+                          className="text-[11px] font-semibold text-red-500 hover:text-red-700"
+                          aria-label={`Delete ${p.name}`}
+                        >
+                          Delete
+                        </button>
+                      </span>
+                    ))
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1222,6 +1725,7 @@ function App() {
 
             <form
               className="mt-4 space-y-3"
+              noValidate
               onSubmit={editResourceId ? handleUpdate : handleUpload}
               onKeyDown={(e) => {
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -1236,7 +1740,6 @@ function App() {
               <div className="space-y-1">
                 <label className="text-sm font-medium text-ink">Title</label>
                 <input
-                  required
                   value={uploadForm.title}
                   ref={titleInputRef}
                   onChange={(e) => setUploadForm((prev) => ({ ...prev, title: e.target.value }))}
@@ -1247,7 +1750,6 @@ function App() {
               <div className="space-y-1">
                 <label className="text-sm font-medium text-ink">Description</label>
                 <textarea
-                  required
                   value={uploadForm.description}
                   onChange={(e) =>
                     setUploadForm((prev) => ({ ...prev, description: e.target.value }))
@@ -1258,15 +1760,38 @@ function App() {
                 />
               </div>
               <div className="space-y-1 max-w-xl mx-auto w-full">
+                <label className="text-sm font-medium text-ink">Resource link (optional)</label>
+                <input
+                  value={uploadForm.url}
+                  onChange={(e) =>
+                    setUploadForm((prev) => ({
+                      ...prev,
+                      url: e.target.value,
+                      fileId: e.target.value ? "" : prev.fileId,
+                    }))
+                  }
+                  placeholder="https://example.com/resource.pdf"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-accent disabled:bg-slate-100"
+                  disabled={hasFile}
+                />
+                <p className="text-xs text-slate-500">
+                  Paste a link OR upload a file below. Links disable file uploads and vice versa.
+                </p>
                 <label className="text-sm font-medium text-ink">Upload file (PDF/DOCX)</label>
                 <div
                   {...getRootProps()}
-                  className={`flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed px-4 py-7 text-center text-sm transition ${
-                    isDragActive ? "border-accent bg-accentSoft/60 text-accent" : "border-slate-200 bg-slate-50 text-slate-600"
+                  className={`flex flex-col items-center justify-center rounded-xl border border-dashed px-4 py-7 text-center text-sm transition ${
+                    hasLink
+                      ? "cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400"
+                      : isDragActive
+                        ? "cursor-pointer border-accent bg-accentSoft/60 text-accent"
+                        : "cursor-pointer border-slate-200 bg-slate-50 text-slate-600"
                   }`}
                 >
                   <input {...getInputProps()} />
-                  {fileLoading ? (
+                  {hasLink ? (
+                    <p className="text-xs text-slate-500">Link in use. Clear the link to attach a file.</p>
+                  ) : fileLoading ? (
                     <div className="flex items-center gap-2 text-slate-500">
                       <span className="h-2 w-2 animate-ping rounded-full bg-accent" />
                       Processing file...
@@ -1358,11 +1883,11 @@ function App() {
                 <p className="text-xs text-slate-500 mr-auto">Tip: Press Ctrl/Cmd + Enter to save quickly.</p>
                 <button
                   type="button"
-                onClick={closeUploadModal}
-                className="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-ink"
-              >
-                Cancel
-              </button>
+                  onClick={closeUploadModal}
+                  className="rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-ink"
+                >
+                  Cancel
+                </button>
                 <button
                   type="submit"
                   disabled={uploading}

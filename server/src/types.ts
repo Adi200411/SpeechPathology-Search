@@ -15,4 +15,17 @@ export type Resource = {
   createdAt: string;
   extractedText?: string;
   insight?: string;
+  ownerId?: string;
+  ownerEmail?: string;
+  patientIds?: string[];
+};
+
+export type Patient = {
+  id?: string;
+  _id?: string;
+  name: string;
+  notes?: string;
+  ownerId?: string;
+  ownerEmail?: string;
+  createdAt: string;
 };

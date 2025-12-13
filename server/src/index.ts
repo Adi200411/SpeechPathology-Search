@@ -30,6 +30,14 @@ const tokenize = (input: string): string[] =>
     .split(/[^a-z0-9]+/)
     .filter(Boolean);
 
+const stem = (token: string): string => {
+  if (token.length <= 3) return token;
+  if (token.endsWith("ies")) return `${token.slice(0, -3)}y`;
+  if (token.endsWith("es")) return token.slice(0, -2);
+  if (token.endsWith("s")) return token.slice(0, -1);
+  return token;
+};
+
 const deriveLetterTags = (text: string): string[] => {
   const letters = text.match(/[a-z]/gi) || [];
   const unique = Array.from(new Set(letters.map((l) => l.toLowerCase())));
@@ -62,9 +70,18 @@ const scoreResources = (query: string, list: Resource[]): Resource[] => {
       const corpus = `${resource.title} ${resource.description} ${(resource.tags || []).join(" ")} ${letterTags.join(" ")} ${resource.extractedText ?? ""}`;
       const rTokens = tokenize(corpus);
       const tokenSet = new Set(rTokens);
-      const overlap = qTokens.reduce((acc, tok) => (tokenSet.has(tok) ? acc + 1 : acc), 0);
+      const stemSet = new Set(rTokens.map(stem));
+
+      const overlap = qTokens.reduce((acc, tok) => (tokenSet.has(tok) ? acc + 2 : acc), 0);
+      const stemOverlap = qTokens.reduce((acc, tok) => (stemSet.has(stem(tok)) ? acc + 1 : acc), 0);
+
+      const substrBonus = qTokens.reduce((acc, tok) => {
+        const hit = (resource.tags || []).some((t) => t.toLowerCase().includes(tok));
+        return hit ? acc + 1 : acc;
+      }, 0);
+
       const includesFull = corpus.toLowerCase().includes(query.toLowerCase()) ? 1 : 0;
-      const score = overlap + includesFull;
+      const score = overlap + stemOverlap + substrBonus + includesFull;
       return { resource, score };
     })
     .filter((item) => item.score > 0)

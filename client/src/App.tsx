@@ -56,13 +56,6 @@ const initialAssistant: Message = {
     "Hi! I can search the speech pathology library, surface relevant resources, and help you upload new materials. What do you need today?",
 };
 
-const quickPrompts = [
-  "Need articulation drill cards for /s/ at phrase level",
-  "Show AAC core boards for early communicators",
-  "Language sample checklist for school-age students",
-  "What materials should I prep for phonology (fronting)?",
-];
-
 const BASE_FOLDERS: Folder[] = [
   { id: "all", name: "All resources", isLocked: true },
   { id: "unsorted", name: "Unsorted", isLocked: true },
@@ -93,6 +86,14 @@ function App() {
   const [fileStatus, setFileStatus] = useState<string | null>(null);
   const [editResourceId, setEditResourceId] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  const [quickPrompts, setQuickPrompts] = useState<string[]>([
+    "Need articulation drill cards for /s/ at phrase level",
+    "Show AAC core boards for early communicators",
+    "Language sample checklist for school-age students",
+    "What materials should I prep for phonology (fronting)?",
+  ]);
+  const [customPrompt, setCustomPrompt] = useState("");
 
   const [uploadForm, setUploadForm] = useState<UploadFormState>({
     title: "",
@@ -357,6 +358,11 @@ function App() {
       setFileStatus("Could not download file. Please try again.");
       pushNotice("Download failed", "error");
     }
+  };
+
+  const handleView = (resource: Resource) => {
+    if (!resource.url) return;
+    window.open(resource.url, "_blank", "noopener,noreferrer");
   };
 
   const handleSend = async () => {
@@ -813,9 +819,9 @@ function App() {
         <header className="mb-6 flex flex-col gap-4 rounded-3xl bg-gradient-to-br from-accentSoft via-foam to-sky/20 p-6 shadow-lg ring-1 ring-white/50 backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.25em] text-slate-600">Speech Library 🐧</p>
+              <p className="text-xs uppercase tracking-[0.25em] text-slate-600">Speechie Library 🐧</p>
               <h1 className="mt-2 text-3xl font-semibold text-ink">
-                Speech Library for Speech Pathologists
+                Resource Library for Speech Pathologists
               </h1>
             </div>
             <div className="flex flex-wrap gap-3">
@@ -847,14 +853,44 @@ function App() {
               <p className="text-sm font-semibold text-ink">Quick prompts</p>
               <div className="mt-3 flex flex-col gap-2">
                 {quickPrompts.map((prompt) => (
-                  <button
+                  <div
                     key={prompt}
-                    onClick={() => setInput(prompt)}
-                    className="rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm text-slate-700 transition hover:-translate-y-[1px] hover:border-accent hover:bg-accentSoft/60"
+                    className="flex items-center gap-2 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-sm text-slate-700 transition hover:-translate-y-[1px] hover:border-accent hover:bg-accentSoft/60"
                   >
-                    {prompt}
-                  </button>
+                    <button
+                      onClick={() => setInput(prompt)}
+                      className="flex-1 text-left"
+                    >
+                      {prompt}
+                    </button>
+                    <button
+                      onClick={() => setQuickPrompts((prev) => prev.filter((p) => p !== prompt))}
+                      aria-label={`Delete prompt ${prompt}`}
+                      className="rounded-full border border-slate-200 px-2 py-1 text-xs font-semibold text-red-500 transition hover:border-red-200 hover:bg-red-50"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 ))}
+              </div>
+              <div className="mt-3 flex gap-2">
+                <input
+                  value={customPrompt}
+                  onChange={(e) => setCustomPrompt(e.target.value)}
+                  placeholder="Add your quick prompt"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-accent"
+                />
+                <button
+                  onClick={() => {
+                    const trimmed = customPrompt.trim();
+                    if (!trimmed) return;
+                    setQuickPrompts((prev) => [trimmed, ...prev].slice(0, 12));
+                    setCustomPrompt("");
+                  }}
+                  className="rounded-xl bg-accent px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-110"
+                >
+                  Add
+                </button>
               </div>
             </div>
           </aside>

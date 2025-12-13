@@ -1820,41 +1820,62 @@ function App() {
                 <p className="text-xs text-slate-500">
                   Paste a link OR upload a file below. Links disable file uploads and vice versa.
                 </p>
-                <label className="text-sm font-medium text-ink">Upload file (PDF/DOCX)</label>
-                <div
-                  {...getRootProps()}
-                  className={`flex flex-col items-center justify-center rounded-xl border border-dashed px-4 py-7 text-center text-sm transition ${
-                    hasLink
-                      ? "cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400"
-                      : isDragActive
-                        ? "cursor-pointer border-accent bg-accentSoft/60 text-accent"
-                        : "cursor-pointer border-slate-200 bg-slate-50 text-slate-600"
-                  }`}
-                >
-                  <input {...getInputProps()} />
-                  {hasLink ? (
-                    <p className="text-xs text-slate-500">Link in use. Clear the link to attach a file.</p>
-                  ) : fileLoading ? (
-                    <div className="flex items-center gap-2 text-slate-500">
-                      <span className="h-2 w-2 animate-ping rounded-full bg-accent" />
-                      Processing file...
+                {!uploadForm.fileId ? (
+                  <>
+                    <label className="text-sm font-medium text-ink">Upload file (PDF/DOCX)</label>
+                    <div
+                      {...getRootProps()}
+                      className={`flex flex-col items-center justify-center rounded-xl border border-dashed px-4 py-7 text-center text-sm transition ${
+                        hasLink
+                          ? "cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400"
+                          : isDragActive
+                            ? "cursor-pointer border-accent bg-accentSoft/60 text-accent"
+                            : "cursor-pointer border-slate-200 bg-slate-50 text-slate-600"
+                      }`}
+                    >
+                      <input {...getInputProps()} />
+                      {hasLink ? (
+                        <p className="text-xs text-slate-500">Link in use. Clear the link to attach a file.</p>
+                      ) : fileLoading ? (
+                        <div className="flex items-center gap-2 text-slate-500">
+                          <span className="h-2 w-2 animate-ping rounded-full bg-accent" />
+                          Processing file...
+                        </div>
+                      ) : (
+                        <>
+                          <p className="font-medium">Drop a PDF/DOCX or click to browse</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Auto-fills title & type from file. Max 15 MB.
+                          </p>
+                        </>
+                      )}
                     </div>
-                  ) : (
-                    <>
-                      <p className="font-medium">Drop a PDF/DOCX or click to browse</p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Auto-fills title & type from file. Max 15 MB.
+                    <p className="text-xs text-slate-500 text-center">
+                      Attach the file, add a title and short description, then save. Tags are optional.
+                    </p>
+                    {fileStatus && (
+                      <p className="mt-1 text-xs text-emerald-600 text-center">
+                        {fileStatus}
                       </p>
-                    </>
-                  )}
-                </div>
-                <p className="text-xs text-slate-500 text-center">
-                  Attach the file, add a title and short description, then save. Tags are optional.
-                </p>
-                {fileStatus && (
-                  <p className="mt-1 text-xs text-emerald-600 text-center">
-                    {fileStatus}
-                  </p>
+                    )}
+                  </>
+                ) : (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-ink">
+                    <div className="flex items-center justify-between">
+                      <p className="font-semibold">File ready to save</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUploadForm((prev) => ({ ...prev, fileId: "", url: "" }));
+                          setFileStatus(null);
+                        }}
+                        className="text-xs font-semibold text-red-500 hover:text-red-700"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-600 mt-1">PDF/DOCX uploaded. Fill in details and save.</p>
+                  </div>
                 )}
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-ink">Tags (optional)</label>

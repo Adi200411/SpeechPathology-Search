@@ -813,9 +813,9 @@ function App() {
         <header className="mb-6 flex flex-col gap-4 rounded-3xl bg-gradient-to-br from-accentSoft via-foam to-sky/20 p-6 shadow-lg ring-1 ring-white/50 backdrop-blur">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <p className="text-xs uppercase tracking-[0.25em] text-slate-600">SpeechPathology</p>
+              <p className="text-xs uppercase tracking-[0.25em] text-slate-600">Speech Library 🐧</p>
               <h1 className="mt-2 text-3xl font-semibold text-ink">
-                Library Chat for Speech Pathologists
+                Speech Library for Speech Pathologists
               </h1>
             </div>
             <div className="flex flex-wrap gap-3">

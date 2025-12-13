@@ -195,6 +195,10 @@ function App() {
         const res = await fetch(`${API_BASE}/api/resources`, {
           headers: authToken ? { Authorization: `Basic ${authToken}` } : {},
         });
+        if (res.status === 401) {
+          handleAuthError();
+          return;
+        }
         const data = await res.json();
         setLibrary(data.data || []);
       } catch (err) {
@@ -213,6 +217,10 @@ function App() {
         const res = await fetch(`${API_BASE}/api/patients`, {
           headers: authToken ? { Authorization: `Basic ${authToken}` } : {},
         });
+        if (res.status === 401) {
+          handleAuthError();
+          return;
+        }
         const data = await res.json();
         setPatients(data.data || []);
       } catch (err) {
@@ -316,7 +324,15 @@ function App() {
     }
   };
 
-  const handleLogin = () => {
+  const clearAuth = () => {
+    setAuthToken(null);
+    setUserProfile(null);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    }
+  };
+
+  const handleLogin = async () => {
     const user = loginForm.username.trim();
     const pass = loginForm.password.trim();
     if (!user || !pass) {
@@ -324,12 +340,25 @@ function App() {
       return;
     }
     const token = btoa(`${user}:${pass}`);
-    setAuthToken(token);
-    setUserProfile({ name: user, email: "" });
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(AUTH_STORAGE_KEY, token);
+    try {
+      const res = await fetch(`${API_BASE}/api/resources`, {
+        headers: { Authorization: `Basic ${token}` },
+        method: "GET",
+      });
+      if (!res.ok) {
+        throw new Error("Invalid credentials");
+      }
+      setAuthToken(token);
+      setUserProfile({ name: user, email: "" });
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(AUTH_STORAGE_KEY, token);
+      }
+      pushNotice("Signed in", "success");
+    } catch (err) {
+      console.error("Login failed", err);
+      clearAuth();
+      pushNotice("Invalid username or password", "error");
     }
-    pushNotice("Signed in", "success");
   };
 
   const handleLogout = () => {
@@ -352,6 +381,13 @@ function App() {
       return;
     }
     toast.success(message);
+  };
+
+  const handleAuthError = () => {
+    pushNotice("Session expired or invalid. Please sign in again.", "error");
+    clearAuth();
+    setLibrary([]);
+    setPatients([]);
   };
 
   const handleAddPatient = async () => {

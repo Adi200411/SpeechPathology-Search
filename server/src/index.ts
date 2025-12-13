@@ -463,7 +463,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
 // Serve built client (single Render deployment)
 const clientDistPath = path.join(__dirname, "..", "..", "client", "dist");
 app.use(express.static(clientDistPath));
-app.get("*", (_req, res) => {
+app.get(/^(?!\/api).*/, (_req, res) => {
   res.sendFile(path.join(clientDistPath, "index.html"));
 });
 

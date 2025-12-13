@@ -653,7 +653,7 @@ function App() {
 
     deleteTimers.current[id] = timer;
 
-    toast.custom((t) => (
+    toast.custom(() => (
       <div
         className="rounded-2xl border bg-white px-4 py-3 text-sm shadow-lg transition"
         role="alert"

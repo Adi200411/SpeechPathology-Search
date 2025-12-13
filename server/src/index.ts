@@ -267,6 +267,11 @@ app.get("/health", (_req, res) => {
 // Authenticated routes
 app.use("/api", verifyAuth as any);
 
+// Simple auth check (no DB dependency)
+app.get("/api/auth-check", (req: AuthedRequest, res: Response) => {
+  res.json({ ok: true, user: req.user?.sub });
+});
+
 // Patients CRUD (minimal)
 app.get("/api/patients", async (req: AuthedRequest, res) => {
   try {

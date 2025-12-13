@@ -342,7 +342,7 @@ function App() {
     }
     const token = btoa(`${user}:${pass}`);
     try {
-      const res = await fetch(`${API_BASE}/api/resources`, {
+      const res = await fetch(`${API_BASE}/api/auth-check`, {
         headers: { Authorization: `Basic ${token}` },
         method: "GET",
       });

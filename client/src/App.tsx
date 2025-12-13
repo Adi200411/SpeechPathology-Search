@@ -810,7 +810,7 @@ function App() {
         ...prev,
         title: prev.title || data.filename,
         description: prev.description || data.suggested?.summary || "Add a brief description",
-        url: prev.url || (data.url ? `${API_BASE}${data.url}` : ""),
+        url: data.url ? `${API_BASE}${data.url}` : prev.url,
         fileId: prev.fileId || data.fileId || "",
         tags:
           Array.isArray(data.suggested?.tags) && data.suggested.tags.length > 0
@@ -1762,7 +1762,7 @@ function App() {
               <div className="space-y-1 max-w-xl mx-auto w-full">
                 <label className="text-sm font-medium text-ink">Resource link (optional)</label>
                 <input
-                  value={uploadForm.url}
+                  value={hasFile ? "" : uploadForm.url}
                   onChange={(e) =>
                     setUploadForm((prev) => ({
                       ...prev,

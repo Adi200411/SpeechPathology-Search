@@ -24,10 +24,31 @@ const openai = new OpenAI({
 
 const PORT = process.env.PORT || 5000;
 
-const USERS = [
-  { username: process.env.BASIC_USER_1 || "therapist", password: process.env.BASIC_PASS_1 || "speech123", email: process.env.BASIC_EMAIL_1 || "therapist@example.com" },
-  { username: process.env.BASIC_USER_2 || "assistant", password: process.env.BASIC_PASS_2 || "helper123", email: process.env.BASIC_EMAIL_2 || "assistant@example.com" },
-];
+const loadUsers = () => {
+  if (process.env.BASIC_USERS) {
+    try {
+      const parsed = JSON.parse(process.env.BASIC_USERS);
+      if (Array.isArray(parsed)) {
+        const cleaned = parsed
+          .map((u) => ({
+            username: u.username,
+            password: u.password,
+            email: u.email || "",
+          }))
+          .filter((u) => u.username && u.password);
+        if (cleaned.length > 0) return cleaned;
+      }
+    } catch (err) {
+      console.error("Failed to parse BASIC_USERS JSON", err);
+    }
+  }
+  return [
+    { username: process.env.BASIC_USER_1 || "therapist", password: process.env.BASIC_PASS_1 || "speech123", email: process.env.BASIC_EMAIL_1 || "therapist@example.com" },
+    { username: process.env.BASIC_USER_2 || "assistant", password: process.env.BASIC_PASS_2 || "helper123", email: process.env.BASIC_EMAIL_2 || "assistant@example.com" },
+  ];
+};
+
+const USERS = loadUsers();
 
 const tokenize = (input: string): string[] =>
   input

@@ -360,10 +360,7 @@ function App() {
     }
   };
 
-  const handleView = (resource: Resource) => {
-    if (!resource.url) return;
-    window.open(resource.url, "_blank", "noopener,noreferrer");
-  };
+  
 
   const handleSend = async () => {
     const trimmed = input.trim();

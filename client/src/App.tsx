@@ -110,7 +110,7 @@ function App() {
   const [userProfile, setUserProfile] = useState<{ name?: string; email?: string } | null>(null);
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
 
-  const [uploadForm, setUploadForm] = useState<UploadFormState>({
+  const initialUploadForm: UploadFormState = {
     title: "",
     description: "",
     url: "",
@@ -119,9 +119,11 @@ function App() {
     ageRange: "",
     type: "",
     uploadedBy: "",
-  });
+  };
+
+  const [uploadForm, setUploadForm] = useState<UploadFormState>(initialUploadForm);
   const hasFile = !!uploadForm.fileId;
-  const hasLink = !!uploadForm.url?.trim();
+  const hasLink = !!uploadForm.url?.trim() && !hasFile;
 
   const [folders, setFolders] = useState<Folder[]>(() => {
     if (typeof window === "undefined") return BASE_FOLDERS;
@@ -178,6 +180,9 @@ function App() {
 
   const closeUploadModal = () => {
     setShowUpload(false);
+    setUploadForm(initialUploadForm);
+    setFileStatus(null);
+    setFileLoading(false);
     if (returnToLibraryAfterEdit) {
       setShowLibrary(true);
       setReturnToLibraryAfterEdit(false);
@@ -330,6 +335,8 @@ function App() {
   const handleLogout = () => {
     setAuthToken(null);
     setUserProfile(null);
+    setUploadForm(initialUploadForm);
+    setFileStatus(null);
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(AUTH_STORAGE_KEY);
     }

@@ -25,6 +25,7 @@ const openai = new OpenAI({
 const PORT = process.env.PORT || 5000;
 
 const loadUsers = () => {
+  // Preferred: BASIC_USERS='[{"username":"name","password":"pass","email":"optional"}]'
   if (process.env.BASIC_USERS) {
     try {
       const parsed = JSON.parse(process.env.BASIC_USERS);
@@ -42,6 +43,26 @@ const loadUsers = () => {
       console.error("Failed to parse BASIC_USERS JSON", err);
     }
   }
+
+  // Fallback: any BASIC_USER_* / BASIC_PASS_* pairs in env
+  const envUsers: { username: string; password: string; email?: string }[] = [];
+  Object.entries(process.env).forEach(([key, value]) => {
+    const match = key.match(/^BASIC_USER_(.+)$/);
+    if (match && value) {
+      const suffix = match[1];
+      const pass = process.env[`BASIC_PASS_${suffix}`];
+      if (pass) {
+        envUsers.push({
+          username: value,
+          password: pass,
+          email: process.env[`BASIC_EMAIL_${suffix}`] || "",
+        });
+      }
+    }
+  });
+  if (envUsers.length > 0) return envUsers;
+
+  // Defaults
   return [
     { username: process.env.BASIC_USER_1 || "therapist", password: process.env.BASIC_PASS_1 || "speech123", email: process.env.BASIC_EMAIL_1 || "therapist@example.com" },
     { username: process.env.BASIC_USER_2 || "assistant", password: process.env.BASIC_PASS_2 || "helper123", email: process.env.BASIC_EMAIL_2 || "assistant@example.com" },

@@ -158,6 +158,7 @@ function App() {
   const [returnToLibraryAfterEdit, setReturnToLibraryAfterEdit] = useState(false);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
   const deleteTimers = useRef<Record<string, number | undefined>>({});
+  const patientDeleteTimers = useRef<Record<string, number | undefined>>({});
 
   const syncResourceUpdateInChat = (updated: Resource) => {
     if (!updated.id) return;
@@ -420,23 +421,43 @@ function App() {
     }
   };
 
-  const handleDeletePatient = async (id?: string) => {
+  const handleDeletePatient = (id?: string) => {
     if (!authToken || !id) return;
-    try {
-      const res = await fetch(`${API_BASE}/api/patients/${id}`, {
-        method: "DELETE",
-        headers: { Authorization: `Basic ${authToken}` },
-      });
-      if (!res.ok && res.status !== 204) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || "Failed to delete patient");
+    const removed = patients.find((p) => p.id === id);
+    if (!removed) return;
+
+    setPatients((prev) => prev.filter((p) => p.id !== id));
+    setLibrary((prev) =>
+      prev.map((r) => ({
+        ...r,
+        patientIds: (r.patientIds || []).filter((pid) => pid !== id),
+      })),
+    );
+    setMessages((prev) =>
+      prev.map((msg) =>
+        msg.resources
+          ? {
+              ...msg,
+              resources: msg.resources.map((r) => ({
+                ...r,
+                patientIds: (r.patientIds || []).filter((pid) => pid !== id),
+              })),
+            }
+          : msg,
+      ),
+    );
+
+    const undoDelete = () => {
+      const t = patientDeleteTimers.current[id];
+      if (t) {
+        clearTimeout(t);
+        delete patientDeleteTimers.current[id];
       }
-      setPatients((prev) => prev.filter((p) => p.id !== id));
-      // Remove patient from any loaded resources
+      setPatients((prev) => [removed, ...prev]);
       setLibrary((prev) =>
         prev.map((r) => ({
           ...r,
-          patientIds: (r.patientIds || []).filter((pid) => pid !== id),
+          patientIds: r.patientIds ? [...r.patientIds, id] : [id],
         })),
       );
       setMessages((prev) =>
@@ -446,17 +467,54 @@ function App() {
                 ...msg,
                 resources: msg.resources.map((r) => ({
                   ...r,
-                  patientIds: (r.patientIds || []).filter((pid) => pid !== id),
+                  patientIds: r.patientIds ? [...r.patientIds, id] : [id],
                 })),
               }
             : msg,
         ),
       );
-      pushNotice("Patient removed", "info");
-    } catch (err) {
-      console.error(err);
-      pushNotice("Could not delete patient.", "error");
-    }
+      pushNotice("Patient restored", "info");
+    };
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/patients/${id}`, {
+          method: "DELETE",
+          headers: { Authorization: `Basic ${authToken}` },
+        });
+        if (!res.ok && res.status !== 204) {
+          throw new Error("Failed to delete patient");
+        }
+      } catch (err) {
+        console.error(err);
+        undoDelete();
+      } finally {
+        delete patientDeleteTimers.current[id];
+      }
+    }, 5000);
+
+    patientDeleteTimers.current[id] = timer;
+
+    toast.custom(
+      () => (
+        <div className="rounded-2xl border bg-white px-4 py-3 text-sm shadow-lg transition" role="alert">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="font-semibold text-ink">Patient deleted</p>
+              <p className="text-xs text-slate-600">Undo within 5 seconds.</p>
+            </div>
+            <button
+              onClick={undoDelete}
+              className="rounded-full bg-accent px-3 py-1 text-xs font-semibold text-white shadow-sm transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              aria-label="Undo delete patient"
+            >
+              Undo
+            </button>
+          </div>
+        </div>
+      ),
+      { id: `delete-patient-${id}`, duration: 5000, position: "top-center" },
+    );
   };
 
   const updateResourcePatients = async (resourceId: string, nextIds: string[]) => {
@@ -1733,7 +1791,7 @@ function App() {
                     patients.map((p) => (
                       <span
                         key={p.id}
-                        className="flex items-center gap-2 rounded-full bg-white px-3 py-1 text-[12px] font-semibold text-ink shadow-sm"
+                        className="flex items-center gap-3 rounded-full bg-white px-3 py-1 text-[12px] font-semibold text-ink shadow-sm"
                       >
                         {p.name}
                         <button

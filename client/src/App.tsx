@@ -62,7 +62,7 @@ const AUTH_STORAGE_KEY = "speech-basic-auth";
 const initialAssistant: Message = {
   role: "assistant",
   content:
-    "Hi! I can search the speech pathology library, surface relevant resources, and help you upload new materials. What do you need today?",
+    " I can search the resource library, find relevant resources, and help you upload new materials. What do you need today?",
 };
 
 const BASE_FOLDERS: Folder[] = [

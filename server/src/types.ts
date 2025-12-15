@@ -18,6 +18,7 @@ export type Resource = {
   ownerId?: string;
   ownerEmail?: string;
   patientIds?: string[];
+  embedding?: number[];
 };
 
 export type Patient = {

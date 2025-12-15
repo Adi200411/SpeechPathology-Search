@@ -199,6 +199,28 @@ const extractTextFromFile = async (mimetype: string, buffer: Buffer): Promise<st
   return "";
 };
 
+const buildEmbeddingText = (resource: Partial<Resource>) => {
+  const parts = [
+    resource.title ?? "",
+    resource.description ?? "",
+    Array.isArray(resource.tags) ? resource.tags.join(" ") : "",
+    resource.extractedText ?? "",
+  ]
+    .join(" ")
+    .trim();
+  return parts.slice(0, 4000);
+};
+
+const getEmbedding = async (text: string): Promise<number[] | undefined> => {
+  if (!text.trim()) return undefined;
+  if (!process.env.OPENAI_API_KEY) return undefined;
+  const emb = await openai.embeddings.create({
+    model: "text-embedding-3-small",
+    input: text,
+  });
+  return emb.data?.[0]?.embedding;
+};
+
 const suggestFromContent = async (title: string, text: string) => {
   if (!process.env.OPENAI_API_KEY || !text.trim()) {
     return { tags: [] as string[], ageRange: undefined as string | undefined, type: undefined as string | undefined, summary: undefined as string | undefined };
@@ -279,6 +301,31 @@ app.use("/api", verifyAuth as any);
 // Simple auth check (no DB dependency)
 app.get("/api/auth-check", (req: AuthedRequest, res: Response) => {
   res.json({ ok: true, user: req.user?.sub });
+});
+
+// TEMP: backfill embeddings for resources missing them. Call once, then remove/disable.
+app.post("/api/admin/backfill-embeddings", async (req: AuthedRequest, res: Response) => {
+  const col = await getResourcesCollection();
+  const cursor = col.find({ ownerId: req.user?.sub, embedding: { $exists: false } }).limit(200);
+  let processed = 0;
+  let embedded = 0;
+
+  for await (const doc of cursor) {
+    processed += 1;
+    const resource = toResource(doc);
+    const embText = buildEmbeddingText(resource);
+    try {
+      const embedding = await getEmbedding(embText);
+      if (embedding) {
+        await col.updateOne({ _id: doc._id }, { $set: { embedding } });
+        embedded += 1;
+      }
+    } catch (err) {
+      console.error("Embedding failed for", doc._id, err);
+    }
+  }
+
+  res.json({ ok: true, processed, embedded });
 });
 
 // Patients CRUD (minimal)
@@ -382,6 +429,11 @@ app.post("/api/upload", async (req: AuthedRequest, res: Response) => {
 
   try {
     const col = await getResourcesCollection();
+    const embText = buildEmbeddingText(newDoc);
+    const embedding = await getEmbedding(embText);
+    if (embedding) {
+      newDoc.embedding = embedding;
+    }
     const result = await col.insertOne(newDoc);
     return res.status(201).json({ data: { ...newDoc, id: result.insertedId.toString(), _id: result.insertedId.toString() } });
   } catch (err) {
@@ -431,6 +483,12 @@ app.put("/api/resources/:id", async (req: AuthedRequest, res: Response) => {
       uploadedBy: uploadedBy ?? existing.uploadedBy ?? req.user?.email,
       patientIds: Array.isArray(patientIds) ? patientIds.filter((p: string) => typeof p === "string") : existing.patientIds || [],
     };
+
+    const embText = buildEmbeddingText({ ...existing, ...updateDoc });
+    const embedding = await getEmbedding(embText);
+    if (embedding) {
+      updateDoc.embedding = embedding;
+    }
 
     await col.updateOne({ _id: new ObjectId(id) as any }, { $set: updateDoc });
     const updated = await col.findOne({ _id: new ObjectId(id) as any });
@@ -598,20 +656,50 @@ app.post("/api/chat", async (req: AuthedRequest, res: Response) => {
 
   try {
     const col = await getResourcesCollection();
-    // naive fetch; in production consider text indexes or vector search
     const docs = await col.find({ ownerId: req.user?.sub }).limit(200).toArray();
     const resources = docs.map(toResource);
 
-    const topMatches = scoreResources(message, resources);
-  const resourceContext =
-    topMatches.length > 0
-      ? topMatches
-          .map(
-            (r, idx) =>
-              `${idx + 1}. ${r.title} - ${r.description} (type: ${r.type || "resource"}, tags: ${r.tags.join(", ")})`,
-          )
-          .join("\n")
-      : "No matching resources in the library.";
+    let topMatches: Resource[] = [];
+
+    // Try vector search first if we have embeddings
+    try {
+      const queryEmbedding = await getEmbedding(message);
+      if (queryEmbedding) {
+        const vectorResults = await col
+          .aggregate([
+            {
+              $vectorSearch: {
+                index: "resource_embedding_index",
+                path: "embedding",
+                queryVector: queryEmbedding,
+                numCandidates: 50,
+                limit: 10,
+                filter: { ownerId: req.user?.sub },
+              },
+            },
+          ])
+          .toArray();
+        if (vectorResults.length > 0) {
+          topMatches = vectorResults.map((r: any) => toResource(r));
+        }
+      }
+    } catch (vectorErr) {
+      console.error("Vector search failed, falling back to lexical", vectorErr);
+    }
+
+    if (topMatches.length === 0) {
+      topMatches = scoreResources(message, resources);
+    }
+
+    const resourceContext =
+      topMatches.length > 0
+        ? topMatches
+            .map(
+              (r, idx) =>
+                `${idx + 1}. ${r.title} - ${r.description} (type: ${r.type || "resource"}, tags: ${r.tags.join(", ")})`,
+            )
+            .join("\n")
+        : "No matching resources in the library.";
 
     const systemPrompt =
       "You are a speech pathology resource assistant. Recommend specific resources from the provided list when relevant. " +

@@ -103,10 +103,20 @@ const verifyAuth = (req: AuthedRequest, res: Response, next: () => void) => {
   next();
 };
 
-const deriveLetterTags = (text: string): string[] => {
-  const letters = text.match(/[a-z]/gi) || [];
-  const unique = Array.from(new Set(letters.map((l) => l.toLowerCase())));
-  return unique.flatMap((l) => [l, `/${l}/`, `letter-${l}`]);
+const derivePhonemeTags = (text: string): string[] => {
+  // Only add phoneme tags if the title explicitly mentions a sound like "/s/" or "letter s"
+  const tags: string[] = [];
+  const slashMatches = text.match(/\/([a-z])\//gi) || [];
+  slashMatches.forEach((m) => {
+    const letter = m.replace(/\//g, "").toLowerCase();
+    tags.push(`/${letter}/`, letter, `letter-${letter}`);
+  });
+  const letterMatches = text.match(/\bletter\s+([a-z])\b/gi) || [];
+  letterMatches.forEach((m) => {
+    const letter = (m.split(" ").pop() || "").toLowerCase();
+    if (letter) tags.push(letter, `/${letter}/`, `letter-${letter}`);
+  });
+  return Array.from(new Set(tags));
 };
 
 const toResource = (doc: any): Resource => ({
@@ -144,8 +154,7 @@ const scoreResources = (query: string, list: Resource[]): Resource[] => {
 
   const scored = list
     .map((resource) => {
-      const letterTags = deriveLetterTags(resource.title);
-      const corpus = `${resource.title} ${resource.description} ${(resource.tags || []).join(" ")} ${letterTags.join(" ")} ${resource.extractedText ?? ""}`;
+      const corpus = `${resource.title} ${resource.description} ${(resource.tags || []).join(" ")} ${resource.extractedText ?? ""}`;
       const rTokens = tokenize(corpus);
       const tokenSet = new Set(rTokens);
       const stemSet = new Set(rTokens.map(stem));
@@ -356,14 +365,12 @@ app.post("/api/upload", async (req: AuthedRequest, res: Response) => {
       ? providedTags
       : tokenize(title).filter((tok) => tok.length > 0 && tok.length <= 10);
 
-  const letterTags = deriveLetterTags(title);
-
   const newDoc: Resource = {
     title,
     description,
     url,
     fileId,
-    tags: Array.from(new Set([...(Array.isArray(derivedTags) ? derivedTags : []), ...letterTags])),
+    tags: Array.from(new Set([...(Array.isArray(derivedTags) ? derivedTags : []), ...derivePhonemeTags(title)])),
     ageRange,
     type,
     uploadedBy: uploadedBy || req.user?.email,
@@ -410,16 +417,15 @@ app.put("/api/resources/:id", async (req: AuthedRequest, res: Response) => {
       return res.status(404).json({ error: "Resource not found" });
     }
 
-    const mergedTags =
-      toTags().length > 0 ? toTags() : (existing.tags as string[]) || [];
-    const letterTags = deriveLetterTags(title || existing.title);
+    const mergedTags = toTags().length > 0 ? toTags() : (existing.tags as string[]) || [];
+    const phonemeTags = derivePhonemeTags(title || existing.title);
 
     const updateDoc: Partial<Resource> = {
       title: title ?? existing.title,
       description: description ?? existing.description,
       url: url ?? existing.url,
       fileId: fileId ?? existing.fileId,
-      tags: Array.from(new Set([...(mergedTags || existing.tags || []), ...letterTags])),
+      tags: Array.from(new Set([...(mergedTags || existing.tags || []), ...phonemeTags])),
       ageRange: ageRange ?? existing.ageRange,
       type: type ?? existing.type,
       uploadedBy: uploadedBy ?? existing.uploadedBy ?? req.user?.email,

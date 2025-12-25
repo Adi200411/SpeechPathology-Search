@@ -3,6 +3,8 @@
 ## Project Overview
 This MERN based web app helps speech pathologists collect, search, and chat about therapy resources. Clinicians can upload PDFs or Word documents, store links, tag materials, link them to patient profiles, and use an AI assistant to surface relevant resources quickly.
 
+![Speechie Library preview](https://github.com/user-attachments/assets/ef364b8d-ce27-4e83-bed0-8e4bb4f762cc)
+
 ## Motivation
 Speech therapy teams spend time hunting for worksheets, drills, and guides. Centralising resources with fast retrieval and contextual AI responses reduces search friction and keeps therapy sessions focused on patient needs.
 
